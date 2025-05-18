@@ -1,10 +1,15 @@
-"use client"
-
-import { Ionicons } from "@expo/vector-icons"
-import AsyncStorage from "@react-native-async-storage/async-storage"
-import { useRouter } from "expo-router"
-import { StatusBar } from "expo-status-bar"
-import { useEffect, useState } from "react"
+import {
+    SignedOut,
+    useAuth,
+    useOAuth,
+    useSignIn,
+    useSignUp
+} from "@clerk/clerk-expo";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { StatusBar } from "expo-status-bar";
+import * as WebBrowser from "expo-web-browser";
+import React, { useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Image,
@@ -17,98 +22,256 @@ import {
     TextInput,
     TouchableOpacity,
     View,
-} from "react-native"
+} from "react-native";
 
-const IndexScreen = () => {
-  const router = useRouter()
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [checkingAuth, setCheckingAuth] = useState(true)
-  const [isLoading, setIsLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [emailError, setEmailError] = useState("")
-  const [passwordError, setPasswordError] = useState("")
+// Required for OAuth to work in Expo
+WebBrowser.maybeCompleteAuthSession();
+
+// Main authentication screen component
+const AuthScreenContent = () => {
+  const router = useRouter();
+  const { isLoaded: isSignInLoaded, signIn, setActive: setSignInActive } = useSignIn();
+  const { isLoaded: isSignUpLoaded, signUp, setActive: setSignUpActive } = useSignUp();
+  const { isSignedIn, isLoaded: isAuthLoaded } = useAuth();
+  const { startOAuthFlow } = useOAuth({ strategy: "oauth_google" });
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [emailError, setEmailError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [isSigningUp, setIsSigningUp] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [pendingVerification, setPendingVerification] = useState(false);
 
   useEffect(() => {
-    const checkLogin = async () => {
-      try {
-        const token = await AsyncStorage.getItem("userToken")
-        if (token) {
-          router.replace("/homescreen")
-        } else {
-          setCheckingAuth(false)
-        }
-      } catch (error) {
-        console.error("Error checking authentication:", error)
-        setCheckingAuth(false)
-      }
+    if (isAuthLoaded && isSignedIn) {
+      router.replace("/homescreen");
     }
-    checkLogin()
-  }, [])
+  }, [isAuthLoaded, isSignedIn]);
 
   const validateEmail = (email: string) => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email) {
-      setEmailError("Email is required")
-      return false
+      setEmailError("Email is required");
+      return false;
     } else if (!emailRegex.test(email)) {
-      setEmailError("Please enter a valid email")
-      return false
+      setEmailError("Please enter a valid email");
+      return false;
     }
-    setEmailError("")
-    return true
-  }
+    setEmailError("");
+    return true;
+  };
 
   const validatePassword = (password: string) => {
     if (!password) {
-      setPasswordError("Password is required")
-      return false
-    } else if (password.length < 6) {
-      setPasswordError("Password must be at least 6 characters")
-      return false
+      setPasswordError("Password is required");
+      return false;
+    } else if (password.length < 8) {
+      setPasswordError("Password must be at least 8 characters");
+      return false;
     }
-    setPasswordError("")
-    return true
-  }
+    setPasswordError("");
+    return true;
+  };
 
-  const handleLogin = async () => {
-    const isEmailValid = validateEmail(email)
-    const isPasswordValid = validatePassword(password)
+  const handleSignInWithGoogle = async () => {
+    try {
+      setIsLoading(true);
+      const { createdSessionId, setActive } = await startOAuthFlow();
+      
+      if (createdSessionId && setActive) {
+        await setActive({ session: createdSessionId });
+        router.replace("/homescreen");
+      }
+    } catch (err) {
+      console.error("OAuth error:", err);
+      alert("Error signing in with Google");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSignUp = async () => {
+    if (!isSignUpLoaded) return;
+
+    const isEmailValid = validateEmail(email);
+    const isPasswordValid = validatePassword(password);
 
     if (!isEmailValid || !isPasswordValid) {
-      return
+      return;
     }
 
-    setIsLoading(true)
+    if (!firstName || !lastName) {
+      alert("Please enter your first and last name");
+      return;
+    }
+
+    setIsLoading(true);
 
     try {
-      // Simulate API call with a delay
-      await new Promise((resolve) => setTimeout(resolve, 1500))
-      await AsyncStorage.setItem("userToken", "dummy-token")
-      router.replace("/homescreen")
-    } catch (error) {
-      console.error("Login error:", error)
+      await signUp.create({
+        emailAddress: email,
+        password,
+        firstName,
+        lastName,
+      });
+
+      // Send verification email
+      await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+      setPendingVerification(true);
+    } catch (err: any) {
+      console.error("Sign up error:", err);
+      alert(err.errors?.[0]?.message || "Sign up failed");
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }
+  };
 
-  const handleForgotPassword = () => {
-    // Handle forgot password logic
-    alert("Forgot password functionality will be implemented here")
-  }
+  const handleVerifyEmail = async () => {
+    if (!isSignUpLoaded || !verificationCode) return;
 
-  const handleSignUp = () => {
-    // Navigate to sign up screen
-    alert("Sign up functionality will be implemented here")
-  }
+    setIsLoading(true);
 
-  if (checkingAuth) {
+    try {
+      const signUpAttempt = await signUp.attemptEmailAddressVerification({
+        code: verificationCode,
+      });
+
+      if (signUpAttempt.status === "complete") {
+        await setSignUpActive({ session: signUpAttempt.createdSessionId });
+        router.replace("/homescreen");
+      } else {
+        console.error(JSON.stringify(signUpAttempt, null, 2));
+        alert("Verification failed. Please try again.");
+      }
+    } catch (err: any) {
+      console.error("Verification error:", err);
+      alert(err.errors?.[0]?.message || "Verification failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSignIn = async () => {
+    if (!isSignInLoaded) return;
+
+    const isEmailValid = validateEmail(email);
+    const isPasswordValid = validatePassword(password);
+
+    if (!isEmailValid || !isPasswordValid) {
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const signInAttempt = await signIn.create({
+        identifier: email,
+        password,
+      });
+
+      if (signInAttempt.status === "complete") {
+        await setSignInActive({ session: signInAttempt.createdSessionId });
+        router.replace("/homescreen");
+      } else {
+        console.error(JSON.stringify(signInAttempt, null, 2));
+        alert("Sign in failed. Please try again.");
+      }
+    } catch (err: any) {
+      console.error("Sign in error:", err);
+      alert(err.errors?.[0]?.message || "Sign in failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!isSignInLoaded || !validateEmail(email)) {
+      alert("Please enter a valid email to reset your password");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      await signIn.create({
+        strategy: "reset_password_email_code",
+        identifier: email,
+      });
+      alert("Check your email for password reset instructions");
+    } catch (err: any) {
+      console.error("Reset password error:", err);
+      alert(err.errors?.[0]?.message || "Failed to send reset password email");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const toggleAuthMode = () => {
+    setIsSigningUp(!isSigningUp);
+    setEmailError("");
+    setPasswordError("");
+    setPendingVerification(false);
+  };
+
+  if (!isSignInLoaded || !isSignUpLoaded || !isAuthLoaded) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#6C63FF" />
       </View>
-    )
+    );
+  }
+
+  if (pendingVerification) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="dark" />
+        <View style={styles.contentContainer}>
+          <View style={styles.logoContainer}>
+            <Image
+              source={{ uri: "https://placeholder.svg?height=120&width=120&query=abstract+colorful+app+logo" }}
+              style={styles.logo}
+            />
+            <Text style={styles.appName}>MyAwesomeApp</Text>
+          </View>
+          
+          <Text style={styles.title}>Verify Your Email</Text>
+          <Text style={styles.subtitle}>Enter the code we sent to your email</Text>
+          
+          <View style={styles.formContainer}>
+            <View style={styles.inputContainer}>
+              <Ionicons name="key-outline" size={20} color="#666" style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="Verification Code"
+                value={verificationCode}
+                onChangeText={setVerificationCode}
+                keyboardType="number-pad"
+                autoCapitalize="none"
+                placeholderTextColor="#999"
+              />
+            </View>
+            
+            <TouchableOpacity 
+              style={styles.loginButton} 
+              onPress={handleVerifyEmail} 
+              disabled={isLoading} 
+              activeOpacity={0.8}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.loginButtonText}>Verify Email</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -124,10 +287,37 @@ const IndexScreen = () => {
             <Text style={styles.appName}>MyAwesomeApp</Text>
           </View>
 
-          <Text style={styles.title}>Welcome Back</Text>
-          <Text style={styles.subtitle}>Sign in to continue</Text>
+          <Text style={styles.title}>{isSigningUp ? "Create Account" : "Welcome Back"}</Text>
+          <Text style={styles.subtitle}>{isSigningUp ? "Sign up to get started" : "Sign in to continue"}</Text>
 
           <View style={styles.formContainer}>
+            {isSigningUp && (
+              <>
+                <View style={styles.nameContainer}>
+                  <View style={[styles.inputContainer, styles.nameInput]}>
+                    <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="First Name"
+                      value={firstName}
+                      onChangeText={setFirstName}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  <View style={[styles.inputContainer, styles.nameInput]}>
+                    <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Last Name"
+                      value={lastName}
+                      onChangeText={setLastName}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                </View>
+              </>
+            )}
+
             <View style={styles.inputContainer}>
               <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
               <TextInput
@@ -135,8 +325,8 @@ const IndexScreen = () => {
                 placeholder="Email"
                 value={email}
                 onChangeText={(text) => {
-                  setEmail(text)
-                  if (emailError) validateEmail(text)
+                  setEmail(text);
+                  if (emailError) validateEmail(text);
                 }}
                 keyboardType="email-address"
                 autoCapitalize="none"
@@ -152,8 +342,8 @@ const IndexScreen = () => {
                 placeholder="Password"
                 value={password}
                 onChangeText={(text) => {
-                  setPassword(text)
-                  if (passwordError) validatePassword(text)
+                  setPassword(text);
+                  if (passwordError) validatePassword(text);
                 }}
                 secureTextEntry={!showPassword}
                 placeholderTextColor="#999"
@@ -164,15 +354,24 @@ const IndexScreen = () => {
             </View>
             {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
 
-            <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotPasswordContainer}>
-              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-            </TouchableOpacity>
+            {!isSigningUp && (
+              <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotPasswordContainer}>
+                <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+              </TouchableOpacity>
+            )}
 
-            <TouchableOpacity style={styles.loginButton} onPress={handleLogin} disabled={isLoading} activeOpacity={0.8}>
+            <TouchableOpacity 
+              style={styles.loginButton} 
+              onPress={isSigningUp ? handleSignUp : handleSignIn} 
+              disabled={isLoading} 
+              activeOpacity={0.8}
+            >
               {isLoading ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.loginButtonText}>Login</Text>
+                <Text style={styles.loginButtonText}>
+                  {isSigningUp ? "Sign Up" : "Login"}
+                </Text>
               )}
             </TouchableOpacity>
 
@@ -182,29 +381,41 @@ const IndexScreen = () => {
               <View style={styles.divider} />
             </View>
 
-            <View style={styles.socialButtonsContainer}>
-              <TouchableOpacity style={[styles.socialButton, styles.googleButton]}>
-                <Ionicons name="logo-google" size={20} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.socialButton, styles.appleButton]}>
-                <Ionicons name="logo-apple" size={20} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.socialButton, styles.facebookButton]}>
-                <Ionicons name="logo-facebook" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity 
+              style={styles.googleButton}
+              onPress={handleSignInWithGoogle}
+              disabled={isLoading}
+            >
+              <Ionicons name="logo-google" size={20} color="#fff" style={styles.googleIcon} />
+              <Text style={styles.googleButtonText}>
+                {isSigningUp ? "Sign up with Google" : "Sign in with Google"}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.signupContainer}>
-            <Text style={styles.signupText}>Don't have an account? </Text>
-            <TouchableOpacity onPress={handleSignUp}>
-              <Text style={styles.signupLink}>Sign Up</Text>
+            <Text style={styles.signupText}>
+              {isSigningUp ? "Already have an account? " : "Don't have an account? "}
+            </Text>
+            <TouchableOpacity onPress={toggleAuthMode}>
+              <Text style={styles.signupLink}>
+                {isSigningUp ? "Sign In" : "Sign Up"}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
-  )
+  );
+};
+
+// Main component that wraps the auth screen
+export default function AuthScreen() {
+  return (
+    <SignedOut>
+      <AuthScreenContent />
+    </SignedOut>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -256,6 +467,14 @@ const styles = StyleSheet.create({
   formContainer: {
     width: "100%",
     maxWidth: 350,
+  },
+  nameContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  nameInput: {
+    width: "48%",
   },
   inputContainer: {
     flexDirection: "row",
@@ -330,32 +549,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     fontSize: 14,
   },
-  socialButtonsContainer: {
+  googleButton: {
     flexDirection: "row",
-    justifyContent: "center",
-    marginBottom: 20,
-  },
-  socialButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    backgroundColor: "#DB4437",
+    borderRadius: 12,
+    height: 55,
     justifyContent: "center",
     alignItems: "center",
-    marginHorizontal: 10,
-    shadowColor: "#000",
+    shadowColor: "#DB4437",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
   },
-  googleButton: {
-    backgroundColor: "#DB4437",
+  googleIcon: {
+    marginRight: 10,
   },
-  appleButton: {
-    backgroundColor: "#000",
-  },
-  facebookButton: {
-    backgroundColor: "#4267B2",
+  googleButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
   },
   signupContainer: {
     flexDirection: "row",
@@ -370,6 +583,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "bold",
   },
-})
-
-export default IndexScreen
+});

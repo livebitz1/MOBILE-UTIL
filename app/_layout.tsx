@@ -1,35 +1,64 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ClerkProvider, useAuth } from '@clerk/clerk-expo';
 import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 
-export default function RootLayout() {
+// SecureStore adapter for Clerk
+const tokenCache = {
+  async getToken(key: string) {
+    try {
+      return SecureStore.getItemAsync(key);
+    } catch (err) {
+      return null;
+    }
+  },
+  async saveToken(key: string, value: string) {
+    try {
+      return SecureStore.setItemAsync(key, value);
+    } catch (err) {
+      return;
+    }
+  },
+};
+
+function RootLayoutNav() {
+  const { isLoaded, isSignedIn } = useAuth();
+  const router = useRouter();
   const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Check login status from AsyncStorage
-    const checkLogin = async () => {
-      const token = await AsyncStorage.getItem('userToken');
-      setIsLoggedIn(!!token);
-    };
-    checkLogin();
-  }, []);
+    if (isLoaded && isSignedIn) {
+      router.replace('/homescreen');
+    }
+  }, [isLoaded, isSignedIn]);
 
-  if (!loaded || isLoggedIn === null) {
+  if (!loaded || !isLoaded) {
     return null;
   }
 
   return (
     <ThemeProvider value={DefaultTheme}>
-      <Stack initialRouteName="homescreen">
-        <Stack.Screen name="homescreen" options={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="homescreen" />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <ClerkProvider
+      tokenCache={tokenCache}
+      publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY}
+    >
+      <RootLayoutNav />
+    </ClerkProvider>
   );
 }
